@@ -40,7 +40,8 @@ struct WheelAxisBinding {
 };
 
 // One entry of "NAME=[device|]N[,...]": button N (or "hN.up", "hN.down",
-// "hN.left", "hN.right" for a hat direction) presses the pad control NAME
+// "hN.left", "hN.right" for a hat direction, or "[+|-]axisN" for an axis
+// past half travel, such as a handbrake lever) presses the pad control NAME
 // (names as in pad_remap: A, B, X, Y, LB, RB, LT, RT, LS, RS, BACK, START,
 // UP, DOWN, LEFT, RIGHT).
 struct WheelButtonBinding {
@@ -48,6 +49,8 @@ struct WheelButtonBinding {
   int button = -1;  // >= 0 for a button
   int hat = -1;     // >= 0 for a hat direction
   uint8_t hat_mask = 0;
+  int axis = -1;  // >= 0 for an axis used as a button
+  AxisDirection axis_direction = AxisDirection::kAuto;
   uint16_t xbuttons = 0;  // pad button bits pressed
   bool left_trigger = false;
   bool right_trigger = false;
@@ -58,9 +61,11 @@ std::optional<WheelAxisBinding> ParseWheelAxisBinding(std::string_view text);
 std::vector<WheelButtonBinding> ParseWheelButtonBindings(std::string_view text);
 
 // `match` is empty (any device), "vvvv:pppp" in hex (USB vendor and
-// product), or a case-insensitive substring of the device name.
+// product), "path:<SDL device path>" (exact, case-insensitive: tells apart
+// identical devices such as several vJoy devices), or a case-insensitive
+// substring of the device name.
 bool WheelDeviceMatches(std::string_view match, std::string_view name, uint16_t vendor,
-                        uint16_t product);
+                        uint16_t product, std::string_view path = {});
 
 // Known wheel bases by USB vendor, for devices SDL does not type as a wheel
 // (SDL types most Logitech, Thrustmaster and Fanatec bases already).

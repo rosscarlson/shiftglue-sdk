@@ -117,3 +117,59 @@ TEST_CASE("One motor read as offset binary becomes a signed force", "[input][whe
   CHECK(ConstantForceForMode(WheelFfbMode::kOff, 0, 65535, 100, false) == 0);
   CHECK(std::string(WheelFfbModeName(WheelFfbMode::kRightSigned)) == "right-signed");
 }
+
+TEST_CASE("Devices match by path to tell identical devices apart", "[input][wheel]") {
+  const char* path = R"(\?\HID#HIDCLASS&Col02#1&2d595ca7&0&0001)";
+  CHECK(WheelDeviceMatches(R"(path:\?\hid#hidclass&col02#1&2d595ca7&0&0001)", "vJoy Device",
+                           0x1234, 0xBEAD, path));
+  CHECK_FALSE(WheelDeviceMatches(R"(path:\?\HID#HIDCLASS&Col01#1&2d595ca7&0&0000)",
+                                 "vJoy Device", 0x1234, 0xBEAD, path));
+  CHECK_FALSE(WheelDeviceMatches("path:anything", "vJoy Device", 0x1234, 0xBEAD, ""));
+  CHECK(WheelDeviceMatches("vjoy", "vJoy Device", 0x1234, 0xBEAD, path));
+  CHECK(WheelDeviceMatches("1234:bead", "vJoy Device", 0x1234, 0xBEAD, path));
+  auto axis = ParseWheelAxisBinding(R"(path:\?\HID#X|-axis2)");
+  REQUIRE(axis);
+  CHECK(axis->device == R"(path:\?\HID#X)");
+  CHECK(axis->axis == 2);
+  CHECK(axis->direction == AxisDirection::kInverted);
+  auto buttons = ParseWheelButtonBindings(R"(A=path:\?\HID#X|3,B=7)");
+  REQUIRE(buttons.size() == 2);
+  CHECK(buttons[0].device == R"(path:\?\HID#X)");
+  CHECK(buttons[0].button == 3);
+  CHECK(buttons[1].device.empty());
+}
+
+TEST_CASE("An axis past half travel can press a button", "[input][wheel]") {
+  auto buttons = ParseWheelButtonBindings("A=Handbrake|-axis3,B=+axis1,X=axis0,Y=axisZ");
+  REQUIRE(buttons.size() == 3);
+  CHECK(buttons[0].device == "Handbrake");
+  CHECK(buttons[0].axis == 3);
+  CHECK(buttons[0].axis_direction == AxisDirection::kInverted);
+  CHECK(buttons[0].button == -1);
+  CHECK(buttons[0].xbuttons == X_INPUT_GAMEPAD_A);
+  CHECK(buttons[1].axis == 1);
+  CHECK(buttons[1].axis_direction == AxisDirection::kNormal);
+  CHECK(buttons[2].axis == 0);
+  CHECK(buttons[2].axis_direction == AxisDirection::kAuto);
+}
+
+TEST_CASE("Parses the bindings PinyonWheelSetup writes", "[input][wheel]") {
+  auto buttons = ParseWheelButtonBindings(
+      "A=0,B=1,Y=3,LB=4,RB=5,LS=6,RS=16d0:0d5a|0,BACK=+axis5,START=9,UP=h0.up,DOWN=h0.down,"
+      "LEFT=h0.left,RIGHT=h0.right");
+  REQUIRE(buttons.size() == 13);
+  CHECK(buttons[6].device == "16d0:0d5a");
+  CHECK(buttons[6].button == 0);
+  CHECK(buttons[6].xbuttons == X_INPUT_GAMEPAD_RIGHT_THUMB);
+  CHECK(buttons[7].axis == 5);
+  CHECK(buttons[7].axis_direction == AxisDirection::kNormal);
+  CHECK(buttons[7].xbuttons == X_INPUT_GAMEPAD_BACK);
+  CHECK(buttons[9].hat == 0);
+  CHECK(buttons[9].hat_mask == 0x01);
+  auto brake = ParseWheelAxisBinding("16d0:0d5a|-axis1");
+  REQUIRE(brake);
+  CHECK(brake->device == "16d0:0d5a");
+  CHECK(brake->axis == 1);
+  CHECK(brake->direction == AxisDirection::kInverted);
+  CHECK(WheelDeviceMatches("16d0:0d5a", "SimJack Pro Pedals", 0x16D0, 0x0D5A));
+}

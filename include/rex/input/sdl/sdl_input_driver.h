@@ -78,6 +78,7 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
     SDL_Joystick* sdl = nullptr;
     SDL_JoystickID instance_id = 0;
     std::string name;
+    std::string path;
     uint16_t vendor = 0;
     uint16_t product = 0;
     // Last values logged by wheel_log_inputs.
@@ -98,6 +99,9 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
     DeviceId id = DeviceId::kInvalid;
     SDL_JoystickID steering = 0;
     SDL_Haptic* haptic = nullptr;
+    // The joystick the force feedback goes to: the steering base, or the
+    // device wheel_ffb_device names.
+    SDL_JoystickID haptic_source = 0;
     int constant_effect = -1;
     int spring_effect = -1;
     int16_t last_force = 0;
@@ -133,7 +137,9 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   void OnJoystickAddedLocked(const SDL_Event& event);
   void OnJoystickRemovedLocked(const SDL_Event& event);
   WheelJoystick* FindWheelJoystick(std::string_view device_match, bool steering_default);
-  void OpenWheelHapticLocked(WheelState& wheel, SDL_Joystick* joystick);
+  void OpenWheelHapticLocked(WheelState& wheel, const WheelJoystick& joystick);
+  void CloseWheelHapticLocked(WheelState& wheel);
+  bool IsFfbTarget(const WheelJoystick& joystick) const;
   void CloseWheelLocked();
   void RefreshWheelBindingsLocked();
   void RefreshWheelStateLocked();

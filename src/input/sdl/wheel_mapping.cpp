@@ -165,7 +165,21 @@ std::vector<WheelButtonBinding> ParseWheelButtonBindings(std::string_view text) 
     binding.xbuttons = target->xbuttons;
     binding.left_trigger = target->left_trigger;
     binding.right_trigger = target->right_trigger;
-    if (StartsWithNoCase(rest, "h")) {
+    std::string_view axis_text = rest;
+    AxisDirection axis_direction = AxisDirection::kAuto;
+    if (!axis_text.empty() && (axis_text.front() == '+' || axis_text.front() == '-')) {
+      axis_direction =
+          axis_text.front() == '+' ? AxisDirection::kNormal : AxisDirection::kInverted;
+      axis_text.remove_prefix(1);
+    }
+    if (StartsWithNoCase(axis_text, "axis")) {
+      auto axis = ParseIndex(axis_text.substr(4));
+      if (!axis) {
+        continue;
+      }
+      binding.axis = *axis;
+      binding.axis_direction = axis_direction;
+    } else if (StartsWithNoCase(rest, "h")) {
       rest.remove_prefix(1);
       const size_t dot = rest.find('.');
       if (dot == std::string_view::npos) {
@@ -207,10 +221,13 @@ std::vector<WheelButtonBinding> ParseWheelButtonBindings(std::string_view text) 
 }
 
 bool WheelDeviceMatches(std::string_view match, std::string_view name, uint16_t vendor,
-                        uint16_t product) {
+                        uint16_t product, std::string_view path) {
   match = Trim(match);
   if (match.empty()) {
     return true;
+  }
+  if (StartsWithNoCase(match, "path:")) {
+    return !path.empty() && Lower(Trim(match.substr(5))) == Lower(path);
   }
   // "vvvv:pppp"
   if (match.size() == 9 && match[4] == ':') {
