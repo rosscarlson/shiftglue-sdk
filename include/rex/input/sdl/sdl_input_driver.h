@@ -14,9 +14,12 @@
 #include <atomic>
 #include <mutex>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include <rex/input/input_driver.h>
+#include <rex/input/sdl/wheel_mapping.h>
 
 #include <SDL3/SDL.h>
 
@@ -69,6 +72,47 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
     KeystrokeState keystroke;
   };
 
+  // A joystick opened raw for the wheel: the steering base or a device one of
+  // the pedal or button bindings names (a separate pedal set, a shifter).
+  struct WheelJoystick {
+    SDL_Joystick* sdl = nullptr;
+    SDL_JoystickID instance_id = 0;
+    std::string name;
+    uint16_t vendor = 0;
+    uint16_t product = 0;
+    // Last values logged by wheel_log_inputs.
+    std::vector<int16_t> logged_axes;
+    std::vector<bool> logged_buttons;
+  };
+
+  // The binding cvars, parsed again only when their text changes.
+  struct WheelBindings {
+    std::string throttle_text, brake_text, clutch_text, buttons_text;
+    std::optional<WheelAxisBinding> throttle, brake, clutch;
+    std::vector<WheelButtonBinding> buttons;
+  };
+
+  // The one guest wheel, built from the steering base plus whatever devices
+  // the bindings name. It exists while the steering base is connected.
+  struct WheelState {
+    DeviceId id = DeviceId::kInvalid;
+    SDL_JoystickID steering = 0;
+    SDL_Haptic* haptic = nullptr;
+    int constant_effect = -1;
+    int spring_effect = -1;
+    int16_t last_force = 0;
+    int last_spring = 0;
+    uint32_t haptic_features = 0;
+    // The guest's last motor values, for wheel_log_inputs.
+    uint16_t logged_left = 0;
+    uint16_t logged_right = 0;
+    X_INPUT_CAPABILITIES caps;
+    X_INPUT_STATE state;
+    bool state_changed = true;
+    bool is_active = false;
+    KeystrokeState keystroke;
+  };
+
   // WindowListener
   void OnClosing(rex::ui::UIEvent& e) override;
   void OnLostFocus(rex::ui::UISetupEvent& e) override;
@@ -81,6 +125,22 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   void OnControllerDeviceRemovedLocked(const SDL_Event& event);
   void OnControllerDeviceAxisMotionLocked(const SDL_Event& event);
   void OnControllerDeviceButtonChangedLocked(const SDL_Event& event);
+
+  // Wheel support (FB-2): raw SDL joysticks rather than gamepads, so axes keep
+  // their own ranges and force feedback can use the haptic subsystem.
+  bool IsSteeringCandidate(SDL_JoystickID instance_id);
+  bool IsWheelPart(SDL_JoystickID instance_id);
+  void OnJoystickAddedLocked(const SDL_Event& event);
+  void OnJoystickRemovedLocked(const SDL_Event& event);
+  WheelJoystick* FindWheelJoystick(std::string_view device_match, bool steering_default);
+  void OpenWheelHapticLocked(WheelState& wheel, SDL_Joystick* joystick);
+  void CloseWheelLocked();
+  void RefreshWheelBindingsLocked();
+  void RefreshWheelStateLocked();
+  void LogWheelInputsLocked();
+  uint8_t ReadWheelPedalLocked(const std::optional<WheelAxisBinding>& binding);
+  X_RESULT SetWheelVibrationLocked(const X_INPUT_VIBRATION& vibration);
+  void UpdateWheelSpringLocked();
 
   inline uint64_t AnalogToKeyfield(const X_INPUT_GAMEPAD& gamepad) const;
   std::optional<size_t> GetControllerIndexFromInstanceID(SDL_JoystickID instance_id);
@@ -100,6 +160,10 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   // Appended in connection order, never re-sorted, and unbounded: the
   // assignment decides how many the guest sees.
   std::vector<ControllerState> controllers_;
+  std::vector<WheelJoystick> wheel_joysticks_;
+  std::optional<WheelState> wheel_;
+  WheelBindings wheel_bindings_;
+  bool sdl_haptic_initialized_ = false;
   std::mutex controllers_mutex_;
   std::mutex event_queue_mutex_;
   std::vector<SDL_Event> pending_events_;
