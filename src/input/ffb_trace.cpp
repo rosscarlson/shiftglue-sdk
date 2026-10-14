@@ -106,24 +106,24 @@ bool EnsureOpenLocked(Trace& trace) {
   trace.start = Clock::now();
   trace.last_flush = trace.start;
   trace.file << "t_ms,event,user,caller,left,right,arg,extra,result,steering,throttle,brake,"
-                "buttons,host_force,mode\n";
+                "buttons,host_force,mode,detail\n";
   REXLOG_INFO("FFB trace: writing {}", rex::path_to_utf8(path));
   return true;
 }
 
 void WriteRowLocked(Trace& trace, std::string_view event, uint32_t user, uint32_t caller,
                     uint32_t left, uint32_t right, uint32_t arg, uint32_t extra,
-                    uint32_t result) {
+                    uint32_t result, std::string_view detail = {}) {
   const auto now = Clock::now();
   const double t_ms = std::chrono::duration<double, std::milli>(now - trace.start).count();
-  trace.file << fmt::format("{:.3f},{},{},{:08X},{},{},{:08X},{:08X},{:08X},{},{},{},{:04X},{},{}\n",
+  trace.file << fmt::format("{:.3f},{},{},{:08X},{},{},{:08X},{:08X},{:08X},{},{},{},{:04X},{},{},\"{}\"\n",
                             t_ms, event, user, caller, left, right, arg, extra, result,
                             g_steering.load(std::memory_order_relaxed),
                             g_throttle.load(std::memory_order_relaxed),
                             g_brake.load(std::memory_order_relaxed),
                             g_buttons.load(std::memory_order_relaxed),
                             g_force.load(std::memory_order_relaxed),
-                            g_mode.load(std::memory_order_relaxed));
+                            g_mode.load(std::memory_order_relaxed), detail);
   trace.rows++;
   // Flushed often enough that a crash loses at most a quarter second.
   if (now - trace.last_flush >= std::chrono::milliseconds(250)) {
@@ -202,6 +202,20 @@ void RecordVibrationLevel(uint32_t user, uint32_t level, uint32_t caller) {
     return;
   }
   WriteRowLocked(trace, "vibration_level", user, caller, level, 0, 0, 0, 0);
+}
+
+void RecordWheelCall(const char* event, uint32_t caller, uint32_t a, uint32_t b, uint32_t c,
+                     uint32_t result, const std::string& detail) {
+  if (!Enabled()) {
+    return;
+  }
+  Trace& trace = GetTrace();
+  std::lock_guard lock(trace.mutex);
+  if (!EnsureOpenLocked(trace)) {
+    return;
+  }
+  // left/right/arg carry the call's first arguments; detail the decoded effect.
+  WriteRowLocked(trace, event, 0, caller, a, b, c, 0, result, detail);
 }
 
 }  // namespace rex::input::ffb_trace

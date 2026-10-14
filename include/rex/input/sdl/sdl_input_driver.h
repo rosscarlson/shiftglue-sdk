@@ -12,6 +12,7 @@
 #pragma once
 
 #include <atomic>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -20,6 +21,7 @@
 
 #include <rex/input/input_driver.h>
 #include <rex/input/sdl/wheel_mapping.h>
+#include <rex/input/wheel_ffb.h>
 
 #include <SDL3/SDL.h>
 
@@ -30,8 +32,19 @@
 
 namespace rex::input::sdl {
 
-class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener {
+class SDLInputDriver final : public InputDriver,
+                             public rex::ui::WindowListener,
+                             public wheel_ffb::Sink {
  public:
+  // wheel_ffb::Sink: the title's XInputdFF* effects, played on the wheel.
+  bool HasForceFeedback() override;
+  void SetEffect(const wheel_ffb::Effect& effect) override;
+  void UpdateEffect(const wheel_ffb::Effect& effect, uint32_t flags) override;
+  void EffectOperation(uint32_t id, uint32_t op) override;
+  void DeviceControl(uint32_t command) override;
+  void SetDeviceGain(uint32_t gain) override;
+  void SetRumble(uint16_t left, uint16_t right) override;
+
   explicit SDLInputDriver(rex::ui::Window* window, size_t window_z_order);
   ~SDLInputDriver() override;
 
@@ -103,6 +116,7 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
     // device wheel_ffb_device names.
     SDL_JoystickID haptic_source = 0;
     int constant_effect = -1;
+    int rumble_effect = -1;  // the title's XInputdFF rumble, as a sine
     int spring_effect = -1;
     int16_t last_force = 0;
     int last_spring = 0;
@@ -147,6 +161,27 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   uint8_t ReadWheelPedalLocked(const std::optional<WheelAxisBinding>& binding);
   X_RESULT SetWheelVibrationLocked(const X_INPUT_VIBRATION& vibration);
   void UpdateWheelSpringLocked();
+
+  // The title's XInputdFF effects by id. They outlive the haptic device, so they
+  // are created again when it (re)opens.
+  struct GameEffect {
+    wheel_ffb::Effect effect;
+    int sdl_id = -1;
+    bool running = false;      // the title started it
+    bool sdl_running = false;  // running on the host
+    bool unsupported = false;
+  };
+  WheelEffectScale EffectScaleLocked() const;
+  bool GameEffectsEnabled() const;
+  void ApplyGameEffectLocked(GameEffect& game);
+  void StopGameEffectLocked(GameEffect& game);
+  void SyncGameEffectsLocked();
+  void ApplyRumbleLocked();
+  std::map<uint32_t, GameEffect> game_effects_;
+  uint16_t game_rumble_left_ = 0;
+  uint16_t game_rumble_right_ = 0;
+  int applied_effect_strength_ = -1;
+  bool applied_effect_invert_ = false;
 
   inline uint64_t AnalogToKeyfield(const X_INPUT_GAMEPAD& gamepad) const;
   std::optional<size_t> GetControllerIndexFromInstanceID(SDL_JoystickID instance_id);

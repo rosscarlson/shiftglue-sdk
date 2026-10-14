@@ -98,6 +98,25 @@ REXCVAR_DEFINE_STRING(wheel_ffb_device, "", "Input",
 REXCVAR_DEFINE_BOOL(wheel_hide_gamepads, true, "Input",
                     "While a racing wheel is connected, hide other SDL gamepads from the title "
                     "so none of them takes player one");
+REXCVAR_DEFINE_BOOL(wheel_ffb_effects, true, "Input",
+                    "Play the title's own wheel force feedback effects (XInputdFF: spring, damper, "
+                    "friction, inertia and constant force) on the wheel")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_INT32(wheel_ffb_rumble, 50, "Input",
+                     "Strength in percent of the title's wheel rumble (kerbs, impacts), played as a "
+                     "vibration on top of the effects")
+    .range(0, 100)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_INT32(wheel_ffb_magnitude_max, 10000, "Input",
+                     "Full-scale value of the title's effect magnitudes and coefficients "
+                     "(DirectInput's 10000); the FFB trace shows the values it sends")
+    .range(1, 1000000)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_INT32(wheel_ffb_saturation_max, 0, "Input",
+                     "Full-scale value of the title's effect saturations and dead bands; 0 decides "
+                     "per effect (255 when every value fits a byte, else 10000)")
+    .range(0, 1000000)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 REXCVAR_DEFINE_BOOL(wheel_log_inputs, false, "Input",
                     "Log wheel axis, button and hat changes and the title's motor values, to "
                     "find the numbers for the wheel bindings")
@@ -121,7 +140,11 @@ SDLInputDriver::SDLInputDriver(rex::ui::Window* window, size_t window_z_order)
       controllers_(),
       controllers_mutex_() {}
 
-SDLInputDriver::~SDLInputDriver() {}
+SDLInputDriver::~SDLInputDriver() {
+  if (wheel_ffb::GetSink() == this) {
+    wheel_ffb::SetSink(nullptr);
+  }
+}
 
 X_STATUS SDLInputDriver::Setup() {
   if (!TestSDLVersion()) {
@@ -211,12 +234,16 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
           REXLOG_INFO("SDL: loaded {} user mappings.", loaded);
         }
       }
+      wheel_ffb::SetSink(this);
       REXLOG_INFO("SDL input driver initialized successfully");
     });
   }
 }
 
 void SDLInputDriver::OnClosing(rex::ui::UIEvent&) {
+  if (wheel_ffb::GetSink() == this) {
+    wheel_ffb::SetSink(nullptr);
+  }
   if (attached_window_) {
     attached_window_->RemoveListener(this);
     if (sdl_pumpevents_queued_) {
@@ -862,6 +889,7 @@ void SDLInputDriver::OnJoystickAddedLocked(const SDL_Event& event) {
     // A separate force feedback device can arrive after the steering base.
     if (!wheel_->haptic && IsFfbTarget(wheel_joysticks_.back())) {
       OpenWheelHapticLocked(*wheel_, wheel_joysticks_.back());
+      SyncGameEffectsLocked();
     }
     return;
   }
@@ -898,6 +926,7 @@ void SDLInputDriver::OnJoystickAddedLocked(const SDL_Event& event) {
     }
   }
   wheel_ = std::move(wheel);
+  SyncGameEffectsLocked();
   REXLOG_INFO("SDL wheel: \"{}\" is the guest's racing wheel, device {}.",
               wheel_joysticks_.back().name, static_cast<uint64_t>(wheel_->id));
   if (REXCVAR_GET(wheel_throttle).empty() || REXCVAR_GET(wheel_brake).empty()) {
@@ -972,6 +1001,7 @@ void SDLInputDriver::OpenWheelHapticLocked(WheelState& wheel, const WheelJoystic
   if (wheel.haptic_features & SDL_HAPTIC_GAIN) {
     SDL_SetHapticGain(wheel.haptic, 100);
   }
+  wheel.rumble_effect = -1;
   const char* haptic_name = SDL_GetHapticName(wheel.haptic);
   REXLOG_INFO("SDL wheel: force feedback on \"{}\" (\"{}\"), constant force {}, spring {}.",
               joystick.name, haptic_name ? haptic_name : "",
@@ -984,6 +1014,17 @@ void SDLInputDriver::CloseWheelHapticLocked(WheelState& wheel) {
     return;
   }
   SDL_StopHapticEffects(wheel.haptic);
+  for (auto& [id, game] : game_effects_) {
+    if (game.sdl_id >= 0) {
+      SDL_DestroyHapticEffect(wheel.haptic, game.sdl_id);
+    }
+    game.sdl_id = -1;
+    game.sdl_running = false;
+  }
+  if (wheel.rumble_effect >= 0) {
+    SDL_DestroyHapticEffect(wheel.haptic, wheel.rumble_effect);
+    wheel.rumble_effect = -1;
+  }
   if (wheel.constant_effect >= 0) {
     SDL_DestroyHapticEffect(wheel.haptic, wheel.constant_effect);
   }
@@ -1155,6 +1196,12 @@ X_RESULT SDLInputDriver::SetWheelVibrationLocked(const X_INPUT_VIBRATION& vibrat
     wheel.logged_left = left;
     wheel.logged_right = right;
   }
+  // Once the title drives the wheel with its own effects (XInputdFF), its
+  // motor values are rumble and arrive through SetRumble; turning them into a
+  // constant force as well would fight the title's.
+  if (!game_effects_.empty() && GameEffectsEnabled()) {
+    return X_ERROR_SUCCESS;
+  }
 
   const WheelFfbMode mode = ParseWheelFfbMode(REXCVAR_GET(wheel_ffb_mode));
   const int strength = REXCVAR_GET(wheel_ffb_strength);
@@ -1212,6 +1259,12 @@ X_RESULT SDLInputDriver::SetWheelVibrationLocked(const X_INPUT_VIBRATION& vibrat
 
 void SDLInputDriver::UpdateWheelSpringLocked() {
   WheelState& wheel = *wheel_;
+  const int strength = REXCVAR_GET(wheel_ffb_strength);
+  const bool invert = REXCVAR_GET(wheel_ffb_invert);
+  if (!game_effects_.empty() &&
+      (strength != applied_effect_strength_ || invert != applied_effect_invert_)) {
+    SyncGameEffectsLocked();
+  }
   if (!wheel.haptic || !(wheel.haptic_features & SDL_HAPTIC_SPRING)) {
     return;
   }
@@ -1248,6 +1301,249 @@ void SDLInputDriver::UpdateWheelSpringLocked() {
     SDL_UpdateHapticEffect(wheel.haptic, wheel.spring_effect, &effect);
   }
   SDL_RunHapticEffect(wheel.haptic, wheel.spring_effect, 1);
+}
+
+// ---------------------------------------------------------------------------
+// The title's XInputdFF effects (wheel_ffb::Sink). Calls come from guest
+// threads; the haptic device belongs to the wheel and is used under the
+// controllers lock like the rest of it.
+
+namespace {
+
+uint16_t SdlEffectType(uint32_t type) {
+  switch (type) {
+    case wheel_ffb::kConstant: return SDL_HAPTIC_CONSTANT;
+    case wheel_ffb::kSpring: return SDL_HAPTIC_SPRING;
+    case wheel_ffb::kDamper: return SDL_HAPTIC_DAMPER;
+    case wheel_ffb::kInertia: return SDL_HAPTIC_INERTIA;
+    case wheel_ffb::kFriction: return SDL_HAPTIC_FRICTION;
+    default: return 0;
+  }
+}
+
+}  // namespace
+
+bool SDLInputDriver::GameEffectsEnabled() const {
+  return REXCVAR_GET(wheel_ffb_effects) &&
+         ParseWheelFfbMode(REXCVAR_GET(wheel_ffb_mode)) != WheelFfbMode::kOff;
+}
+
+WheelEffectScale SDLInputDriver::EffectScaleLocked() const {
+  WheelEffectScale scale;
+  scale.strength_percent = REXCVAR_GET(wheel_ffb_strength);
+  scale.magnitude_max = REXCVAR_GET(wheel_ffb_magnitude_max);
+  scale.saturation_max = REXCVAR_GET(wheel_ffb_saturation_max);
+  scale.invert = REXCVAR_GET(wheel_ffb_invert);
+  return scale;
+}
+
+void SDLInputDriver::StopGameEffectLocked(GameEffect& game) {
+  if (wheel_ && wheel_->haptic && game.sdl_id >= 0 && game.sdl_running) {
+    SDL_StopHapticEffect(wheel_->haptic, game.sdl_id);
+  }
+  game.sdl_running = false;
+}
+
+void SDLInputDriver::ApplyGameEffectLocked(GameEffect& game) {
+  if (!wheel_ || !wheel_->haptic) {
+    return;
+  }
+  if (!GameEffectsEnabled()) {
+    StopGameEffectLocked(game);
+    return;
+  }
+  SDL_Haptic* haptic = wheel_->haptic;
+  const wheel_ffb::Effect& e = game.effect;
+  const uint16_t sdl_type = SdlEffectType(e.type);
+  if (!sdl_type || !(wheel_->haptic_features & sdl_type)) {
+    if (!game.unsupported) {
+      REXLOG_WARN("SDL wheel: the wheel has no {} effect; the title's effect #{} is left out.",
+                  wheel_ffb::EffectTypeName(e.type), e.id);
+      game.unsupported = true;
+    }
+    return;
+  }
+  WheelEffectScale scale = EffectScaleLocked();
+  SDL_HapticEffect effect;
+  SDL_zero(effect);
+  if (e.type == wheel_ffb::kConstant) {
+    effect.type = SDL_HAPTIC_CONSTANT;
+    effect.constant.direction.type = SDL_HAPTIC_STEERING_AXIS;
+    effect.constant.length = SDL_HAPTIC_INFINITY;
+    effect.constant.level = EffectConstantLevel(e, scale);
+    ffb_trace::NoteWheelOutput(effect.constant.level, "effects");
+  } else {
+    if (scale.saturation_max <= 0) {
+      const bool bytes = e.positive_saturation <= 255 && e.negative_saturation <= 255 &&
+                         e.dead_band <= 255;
+      scale.saturation_max = bytes ? 255 : 10000;
+    }
+    const WheelCondition c = EffectCondition(e, scale);
+    effect.type = sdl_type;
+    effect.condition.direction.type = SDL_HAPTIC_STEERING_AXIS;
+    effect.condition.length = SDL_HAPTIC_INFINITY;
+    effect.condition.right_sat[0] = c.right_sat;
+    effect.condition.left_sat[0] = c.left_sat;
+    effect.condition.right_coeff[0] = c.right_coeff;
+    effect.condition.left_coeff[0] = c.left_coeff;
+    effect.condition.deadband[0] = c.deadband;
+    effect.condition.center[0] = c.center;
+  }
+  if (game.sdl_id < 0) {
+    game.sdl_id = SDL_CreateHapticEffect(haptic, &effect);
+    if (game.sdl_id < 0) {
+      REXLOG_WARN("SDL wheel: could not create the title's {} effect #{}: {}",
+                  wheel_ffb::EffectTypeName(e.type), e.id, SDL_GetError());
+      game.unsupported = true;
+      return;
+    }
+    game.sdl_running = false;
+  } else if (!SDL_UpdateHapticEffect(haptic, game.sdl_id, &effect)) {
+    return;
+  }
+  if (game.running && !game.sdl_running) {
+    game.sdl_running = SDL_RunHapticEffect(haptic, game.sdl_id, 1);
+  } else if (!game.running && game.sdl_running) {
+    StopGameEffectLocked(game);
+  }
+}
+
+void SDLInputDriver::SyncGameEffectsLocked() {
+  applied_effect_strength_ = REXCVAR_GET(wheel_ffb_strength);
+  applied_effect_invert_ = REXCVAR_GET(wheel_ffb_invert);
+  for (auto& [id, game] : game_effects_) {
+    ApplyGameEffectLocked(game);
+  }
+  ApplyRumbleLocked();
+}
+
+void SDLInputDriver::ApplyRumbleLocked() {
+  if (!wheel_ || !wheel_->haptic || !(wheel_->haptic_features & SDL_HAPTIC_SINE)) {
+    return;
+  }
+  WheelState& wheel = *wheel_;
+  const uint16_t strongest = std::max(game_rumble_left_, game_rumble_right_);
+  int64_t magnitude = int64_t(strongest) * 32767 / 65535;
+  magnitude = magnitude * std::clamp(REXCVAR_GET(wheel_ffb_rumble), 0, 100) / 100;
+  magnitude = magnitude * std::clamp(REXCVAR_GET(wheel_ffb_strength), 0, 100) / 100;
+  if (!GameEffectsEnabled()) {
+    magnitude = 0;
+  }
+  if (magnitude == 0) {
+    if (wheel.rumble_effect >= 0) {
+      SDL_StopHapticEffect(wheel.haptic, wheel.rumble_effect);
+    }
+    return;
+  }
+  SDL_HapticEffect effect;
+  SDL_zero(effect);
+  effect.type = SDL_HAPTIC_SINE;
+  effect.periodic.direction.type = SDL_HAPTIC_STEERING_AXIS;
+  effect.periodic.length = SDL_HAPTIC_INFINITY;
+  // The right (small) motor buzzes, the left (large) one rumbles.
+  effect.periodic.period = game_rumble_right_ > game_rumble_left_ ? 25 : 60;
+  effect.periodic.magnitude = static_cast<int16_t>(magnitude);
+  if (wheel.rumble_effect < 0) {
+    wheel.rumble_effect = SDL_CreateHapticEffect(wheel.haptic, &effect);
+    if (wheel.rumble_effect < 0) {
+      wheel.haptic_features &= ~uint32_t(SDL_HAPTIC_SINE);
+      return;
+    }
+  } else {
+    SDL_UpdateHapticEffect(wheel.haptic, wheel.rumble_effect, &effect);
+  }
+  SDL_RunHapticEffect(wheel.haptic, wheel.rumble_effect, 1);
+}
+
+bool SDLInputDriver::HasForceFeedback() {
+  auto guard = DrainAndLock();
+  return wheel_ && wheel_->haptic;
+}
+
+void SDLInputDriver::SetEffect(const wheel_ffb::Effect& effect) {
+  auto guard = DrainAndLock();
+  GameEffect& game = game_effects_[effect.id];
+  if (game.sdl_id >= 0 && game.effect.type != effect.type && wheel_ && wheel_->haptic) {
+    SDL_DestroyHapticEffect(wheel_->haptic, game.sdl_id);
+    game.sdl_id = -1;
+    game.sdl_running = false;
+  }
+  game.effect = effect;
+  game.unsupported = false;
+  ApplyGameEffectLocked(game);
+}
+
+void SDLInputDriver::UpdateEffect(const wheel_ffb::Effect& effect, uint32_t) {
+  auto guard = DrainAndLock();
+  auto it = game_effects_.find(effect.id);
+  if (it == game_effects_.end()) {
+    // An update for an effect never set: treat it as set.
+    GameEffect& game = game_effects_[effect.id];
+    game.effect = effect;
+    ApplyGameEffectLocked(game);
+    return;
+  }
+  it->second.effect = effect;
+  ApplyGameEffectLocked(it->second);
+}
+
+void SDLInputDriver::EffectOperation(uint32_t id, uint32_t op) {
+  auto guard = DrainAndLock();
+  auto it = game_effects_.find(id);
+  if (it == game_effects_.end()) {
+    return;
+  }
+  it->second.running = op != 3;
+  ApplyGameEffectLocked(it->second);
+}
+
+void SDLInputDriver::DeviceControl(uint32_t command) {
+  auto guard = DrainAndLock();
+  SDL_Haptic* haptic = wheel_ ? wheel_->haptic : nullptr;
+  switch (command) {
+    case wheel_ffb::kStopAll:
+    case wheel_ffb::kDisableActuators:
+      for (auto& [id, game] : game_effects_) {
+        game.running = false;
+        StopGameEffectLocked(game);
+      }
+      break;
+    case wheel_ffb::kReset:
+      for (auto& [id, game] : game_effects_) {
+        if (haptic && game.sdl_id >= 0) {
+          SDL_DestroyHapticEffect(haptic, game.sdl_id);
+        }
+      }
+      game_effects_.clear();
+      break;
+    case wheel_ffb::kPause:
+      if (haptic && (wheel_->haptic_features & SDL_HAPTIC_PAUSE)) SDL_PauseHaptic(haptic);
+      break;
+    case wheel_ffb::kContinue:
+      if (haptic && (wheel_->haptic_features & SDL_HAPTIC_PAUSE)) SDL_ResumeHaptic(haptic);
+      break;
+    default:
+      break;
+  }
+}
+
+void SDLInputDriver::SetDeviceGain(uint32_t gain) {
+  auto guard = DrainAndLock();
+  if (!wheel_ || !wheel_->haptic || !(wheel_->haptic_features & SDL_HAPTIC_GAIN)) {
+    return;
+  }
+  const int percent = gain <= 255 ? int(gain * 100 / 255) : int(std::min<uint32_t>(gain, 10000) / 100);
+  SDL_SetHapticGain(wheel_->haptic, percent);
+}
+
+void SDLInputDriver::SetRumble(uint16_t left, uint16_t right) {
+  auto guard = DrainAndLock();
+  if (left == game_rumble_left_ && right == game_rumble_right_) {
+    return;
+  }
+  game_rumble_left_ = left;
+  game_rumble_right_ = right;
+  ApplyRumbleLocked();
 }
 
 std::optional<size_t> SDLInputDriver::GetControllerIndexFromInstanceID(SDL_JoystickID instance_id) {

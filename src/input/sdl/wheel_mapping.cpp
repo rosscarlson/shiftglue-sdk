@@ -358,6 +358,53 @@ int16_t ConstantForceForMode(WheelFfbMode mode, uint16_t left_motor, uint16_t ri
   }
 }
 
+namespace {
+
+int64_t ScaleSigned(int64_t value, int64_t full_scale, int64_t out_max) {
+  if (full_scale <= 0) {
+    return 0;
+  }
+  return std::clamp<int64_t>(value * out_max / full_scale, -out_max, out_max);
+}
+
+int64_t ApplyGain(int64_t value, uint32_t gain, int strength_percent) {
+  value = value * std::min<uint32_t>(gain, 255) / 255;
+  return value * std::clamp(strength_percent, 0, 100) / 100;
+}
+
+}  // namespace
+
+int16_t EffectConstantLevel(const wheel_ffb::Effect& effect, const WheelEffectScale& scale) {
+  int64_t level = ScaleSigned(effect.magnitude, scale.magnitude_max, 32767);
+  level = ApplyGain(level, effect.gain, scale.strength_percent);
+  if (scale.invert) {
+    level = -level;
+  }
+  return static_cast<int16_t>(std::clamp<int64_t>(level, -32767, 32767));
+}
+
+WheelCondition EffectCondition(const wheel_ffb::Effect& effect, const WheelEffectScale& scale) {
+  auto coeff = [&](int32_t value) {
+    const int64_t scaled = ScaleSigned(value, scale.magnitude_max, 32767);
+    return static_cast<int16_t>(ApplyGain(scaled, effect.gain, scale.strength_percent));
+  };
+  auto unsigned_scale = [&](int32_t value) {
+    if (scale.saturation_max <= 0) {
+      return uint16_t(0);
+    }
+    const int64_t scaled = int64_t(std::max(value, 0)) * 65535 / scale.saturation_max;
+    return static_cast<uint16_t>(std::min<int64_t>(scaled, 65535));
+  };
+  WheelCondition c;
+  c.right_coeff = coeff(effect.positive_coefficient);
+  c.left_coeff = coeff(effect.negative_coefficient);
+  c.right_sat = unsigned_scale(effect.positive_saturation);
+  c.left_sat = unsigned_scale(effect.negative_saturation);
+  c.deadband = unsigned_scale(effect.dead_band);
+  c.center = static_cast<int16_t>(ScaleSigned(effect.magnitude, scale.magnitude_max, 32767));
+  return c;
+}
+
 const char* WheelFfbModeName(WheelFfbMode mode) {
   switch (mode) {
     case WheelFfbMode::kOff: return "off";

@@ -173,3 +173,108 @@ TEST_CASE("Parses the bindings PinyonWheelSetup writes", "[input][wheel]") {
   CHECK(brake->direction == AxisDirection::kInverted);
   CHECK(WheelDeviceMatches("16d0:0d5a", "SimJack Pro Pedals", 0x16D0, 0x0D5A));
 }
+
+namespace {
+
+// A 116-byte big-endian descriptor laid out as Forza Horizon's wheel set-up builds one.
+std::array<uint8_t, 116> Descriptor(uint32_t id, uint32_t type, uint32_t gain, int32_t magnitude,
+                                    int32_t pc, int32_t nc, int32_t ps, int32_t ns, int32_t db) {
+  std::array<uint32_t, 29> words{};
+  words[0] = id;
+  words[1] = type;
+  words[2] = 4;
+  words[3] = gain;
+  words[4] = 4080;
+  words[7] = 255;
+  words[8] = 255;
+  words[11] = uint32_t(magnitude);
+  words[12] = uint32_t(pc);
+  words[13] = uint32_t(nc);
+  words[14] = uint32_t(ps);
+  words[15] = uint32_t(ns);
+  words[16] = uint32_t(db);
+  std::array<uint8_t, 116> bytes{};
+  for (size_t i = 0; i < words.size(); i++) {
+    bytes[i * 4] = uint8_t(words[i] >> 24);
+    bytes[i * 4 + 1] = uint8_t(words[i] >> 16);
+    bytes[i * 4 + 2] = uint8_t(words[i] >> 8);
+    bytes[i * 4 + 3] = uint8_t(words[i]);
+  }
+  return bytes;
+}
+
+}  // namespace
+
+TEST_CASE("Wheel effect descriptors decode from big-endian guest memory", "[input][wheel]") {
+  auto spring = Descriptor(4, 8, 255, 0, 6000, 6000, 9000, 9000, 100);
+  const auto e = rex::input::wheel_ffb::DecodeEffect(spring.data());
+  CHECK(e.id == 4);
+  CHECK(e.type == rex::input::wheel_ffb::kSpring);
+  CHECK(e.gain == 255);
+  CHECK(e.positive_coefficient == 6000);
+  CHECK(e.negative_coefficient == 6000);
+  CHECK(e.positive_saturation == 9000);
+  CHECK(e.dead_band == 100);
+  CHECK(e.words[4] == 4080);
+  CHECK(rex::input::wheel_ffb::IsConditionType(e.type));
+  CHECK(std::string(rex::input::wheel_ffb::EffectTypeName(10)) == "inertia");
+
+  auto constant = Descriptor(5, 1, 128, -5000, 0, 0, 0, 0, 0);
+  const auto c = rex::input::wheel_ffb::DecodeEffect(constant.data());
+  CHECK(c.type == rex::input::wheel_ffb::kConstant);
+  CHECK(c.magnitude == -5000);
+  CHECK_FALSE(rex::input::wheel_ffb::IsConditionType(c.type));
+}
+
+TEST_CASE("Constant effects scale by magnitude, gain, strength and invert", "[input][wheel]") {
+  rex::input::wheel_ffb::Effect e;
+  e.type = rex::input::wheel_ffb::kConstant;
+  e.gain = 255;
+  e.magnitude = 10000;
+  WheelEffectScale scale;
+  CHECK(EffectConstantLevel(e, scale) == 32767);
+  e.magnitude = -10000;
+  CHECK(EffectConstantLevel(e, scale) == -32767);
+  scale.invert = true;
+  CHECK(EffectConstantLevel(e, scale) == 32767);
+  scale.invert = false;
+  scale.strength_percent = 25;
+  CHECK(EffectConstantLevel(e, scale) == -8191);
+  scale.strength_percent = 100;
+  e.gain = 0;
+  CHECK(EffectConstantLevel(e, scale) == 0);
+  e.gain = 255;
+  e.magnitude = 50000;  // beyond full scale clamps
+  CHECK(EffectConstantLevel(e, scale) == 32767);
+}
+
+TEST_CASE("Condition effects scale coefficients and saturations", "[input][wheel]") {
+  rex::input::wheel_ffb::Effect e;
+  e.type = rex::input::wheel_ffb::kSpring;
+  e.gain = 255;
+  e.positive_coefficient = 5000;
+  e.negative_coefficient = 10000;
+  e.positive_saturation = 10000;
+  e.negative_saturation = 5000;
+  e.dead_band = 0;
+  WheelEffectScale scale;
+  auto c = EffectCondition(e, scale);
+  CHECK(c.right_coeff == 16383);
+  CHECK(c.left_coeff == 32767);
+  CHECK(c.right_sat == 65535);
+  CHECK(c.left_sat == 32767);
+  CHECK(c.deadband == 0);
+  // The speed-dependent spring: half gain halves the coefficients only.
+  e.gain = 127;
+  c = EffectCondition(e, scale);
+  CHECK(c.left_coeff == 16319);
+  CHECK(c.right_sat == 65535);
+  // Byte-range saturations.
+  scale.saturation_max = 255;
+  e.positive_saturation = 255;
+  CHECK(EffectCondition(e, scale).right_sat == 65535);
+  // Strength.
+  e.gain = 255;
+  scale.strength_percent = 50;
+  CHECK(EffectCondition(e, scale).left_coeff == 16383);
+}

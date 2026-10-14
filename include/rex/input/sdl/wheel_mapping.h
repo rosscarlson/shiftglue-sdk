@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <rex/input/input.h>
+#include <rex/input/wheel_ffb.h>
 
 namespace rex::input::sdl {
 
@@ -115,5 +116,32 @@ int16_t ConstantForceForMode(WheelFfbMode mode, uint16_t left_motor, uint16_t ri
                              int strength_percent, bool invert);
 
 const char* WheelFfbModeName(WheelFfbMode mode);
+
+// How the title's XInputdFF effect values become SDL haptic values. magnitude_max is the
+// title's full-scale magnitude and coefficient (the DirectInput nominal 10000 unless the trace
+// shows otherwise), saturation_max its full-scale saturation and dead band, and gains are 0..255.
+struct WheelEffectScale {
+  int strength_percent = 100;
+  int magnitude_max = 10000;
+  int saturation_max = 10000;
+  bool invert = false;
+};
+
+// SDL's constant-force level for a constant effect: magnitude x gain x strength, reversed by
+// invert.
+int16_t EffectConstantLevel(const wheel_ffb::Effect& effect, const WheelEffectScale& scale);
+
+struct WheelCondition {
+  int16_t right_coeff = 0;  // the positive side
+  int16_t left_coeff = 0;
+  uint16_t right_sat = 0;
+  uint16_t left_sat = 0;
+  uint16_t deadband = 0;
+  int16_t center = 0;
+};
+
+// SDL's condition values (spring, damper, inertia, friction). Gain and strength scale the
+// coefficients; Forza Horizon's spring gain follows the car's speed.
+WheelCondition EffectCondition(const wheel_ffb::Effect& effect, const WheelEffectScale& scale);
 
 }  // namespace rex::input::sdl
