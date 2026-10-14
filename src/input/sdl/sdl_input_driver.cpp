@@ -21,6 +21,7 @@
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
+#include <rex/input/ffb_trace.h>
 #include <rex/input/flags.h>
 #include <rex/input/pad_remap.h>
 #include <rex/input/sdl/joystick_mapping.h>
@@ -77,10 +78,11 @@ REXCVAR_DEFINE_STRING(wheel_buttons, "UP=h0.up,DOWN=h0.down,LEFT=h0.left,RIGHT=h
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 REXCVAR_DEFINE_STRING(wheel_ffb_mode, "difference", "Input",
                       "Force feedback: difference (the title's two motor values as a signed "
-                      "constant force), rumble, or off")
-    .allowed({"difference", "rumble", "off"})
+                      "constant force, right minus left), left-signed or right-signed (one "
+                      "motor alone, 0x8000 = no force), rumble, or off")
+    .allowed({"difference", "left-signed", "right-signed", "rumble", "off"})
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
-REXCVAR_DEFINE_INT32(wheel_ffb_strength, 50, "Input",
+REXCVAR_DEFINE_INT32(wheel_ffb_strength, 25, "Input",
                      "Force feedback strength in percent of what the title asks for")
     .range(0, 100)
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
@@ -1033,6 +1035,7 @@ void SDLInputDriver::RefreshWheelStateLocked() {
   pad.buttons = buttons;
   pad.left_trigger = left_trigger;
   pad.right_trigger = right_trigger;
+  ffb_trace::NoteWheelInput(pad.thumb_lx, right_trigger, left_trigger, buttons);
 
   if (std::memcmp(&pad, &wheel_->state.gamepad, sizeof(pad)) != 0) {
     wheel_->state.gamepad = pad;
@@ -1092,6 +1095,7 @@ X_RESULT SDLInputDriver::SetWheelVibrationLocked(const X_INPUT_VIBRATION& vibrat
       SDL_StopHapticEffect(wheel.haptic, wheel.constant_effect);
       wheel.last_force = 0;
     }
+    ffb_trace::NoteWheelOutput(0, mode == WheelFfbMode::kOff ? "off" : "rumble");
     if (mode == WheelFfbMode::kOff || !base) {
       return X_ERROR_SUCCESS;
     }
@@ -1101,10 +1105,9 @@ X_RESULT SDLInputDriver::SetWheelVibrationLocked(const X_INPUT_VIBRATION& vibrat
     return X_ERROR_SUCCESS;
   }
 
-  const int16_t level = mode == WheelFfbMode::kOff
-                            ? int16_t(0)
-                            : ConstantForceFromMotors(left, right, strength,
-                                                      REXCVAR_GET(wheel_ffb_invert));
+  const int16_t level =
+      ConstantForceForMode(mode, left, right, strength, REXCVAR_GET(wheel_ffb_invert));
+  ffb_trace::NoteWheelOutput(level, WheelFfbModeName(mode));
   if (level == wheel.last_force) {
     return X_ERROR_SUCCESS;
   }

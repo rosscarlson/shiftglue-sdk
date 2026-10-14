@@ -299,6 +299,12 @@ WheelFfbMode ParseWheelFfbMode(std::string_view text) {
   if (mode == "rumble") {
     return WheelFfbMode::kRumble;
   }
+  if (mode == "left-signed") {
+    return WheelFfbMode::kLeftSigned;
+  }
+  if (mode == "right-signed") {
+    return WheelFfbMode::kRightSigned;
+  }
   return WheelFfbMode::kDifference;
 }
 
@@ -310,6 +316,40 @@ int16_t ConstantForceFromMotors(uint16_t left_motor, uint16_t right_motor, int s
   }
   const int64_t level = int64_t(force) * 32767 / 65535 * std::clamp(strength_percent, 0, 100) / 100;
   return static_cast<int16_t>(std::clamp<int64_t>(level, -32767, 32767));
+}
+
+int16_t ConstantForceFromSignedMotor(uint16_t motor, int strength_percent, bool invert) {
+  int32_t force = int32_t(motor) - 0x8000;  // -32768..32767
+  if (invert) {
+    force = -force;
+  }
+  const int64_t level = int64_t(force) * std::clamp(strength_percent, 0, 100) / 100;
+  return static_cast<int16_t>(std::clamp<int64_t>(level, -32767, 32767));
+}
+
+int16_t ConstantForceForMode(WheelFfbMode mode, uint16_t left_motor, uint16_t right_motor,
+                             int strength_percent, bool invert) {
+  switch (mode) {
+    case WheelFfbMode::kDifference:
+      return ConstantForceFromMotors(left_motor, right_motor, strength_percent, invert);
+    case WheelFfbMode::kLeftSigned:
+      return ConstantForceFromSignedMotor(left_motor, strength_percent, invert);
+    case WheelFfbMode::kRightSigned:
+      return ConstantForceFromSignedMotor(right_motor, strength_percent, invert);
+    default:
+      return 0;
+  }
+}
+
+const char* WheelFfbModeName(WheelFfbMode mode) {
+  switch (mode) {
+    case WheelFfbMode::kOff: return "off";
+    case WheelFfbMode::kDifference: return "difference";
+    case WheelFfbMode::kRumble: return "rumble";
+    case WheelFfbMode::kLeftSigned: return "left-signed";
+    case WheelFfbMode::kRightSigned: return "right-signed";
+  }
+  return "?";
 }
 
 }  // namespace rex::input::sdl

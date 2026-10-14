@@ -100,3 +100,20 @@ TEST_CASE("Motor values become a signed constant force", "[input][wheel]") {
   CHECK(ParseWheelFfbMode("Rumble") == WheelFfbMode::kRumble);
   CHECK(ParseWheelFfbMode("difference") == WheelFfbMode::kDifference);
 }
+
+TEST_CASE("One motor read as offset binary becomes a signed force", "[input][wheel]") {
+  CHECK(ConstantForceFromSignedMotor(0x8000, 100, false) == 0);
+  CHECK(ConstantForceFromSignedMotor(0xFFFF, 100, false) == 32767);
+  CHECK(ConstantForceFromSignedMotor(0x0000, 100, false) == -32767);
+  CHECK(ConstantForceFromSignedMotor(0x0000, 100, true) == 32767);
+  CHECK(ConstantForceFromSignedMotor(0xFFFF, 50, false) == 16383);
+
+  CHECK(ParseWheelFfbMode("left-signed") == WheelFfbMode::kLeftSigned);
+  CHECK(ParseWheelFfbMode("RIGHT-SIGNED") == WheelFfbMode::kRightSigned);
+  CHECK(ConstantForceForMode(WheelFfbMode::kLeftSigned, 0xFFFF, 0x8000, 100, false) == 32767);
+  CHECK(ConstantForceForMode(WheelFfbMode::kRightSigned, 0xFFFF, 0x8000, 100, false) == 0);
+  CHECK(ConstantForceForMode(WheelFfbMode::kDifference, 0, 65535, 100, false) == 32767);
+  CHECK(ConstantForceForMode(WheelFfbMode::kRumble, 0, 65535, 100, false) == 0);
+  CHECK(ConstantForceForMode(WheelFfbMode::kOff, 0, 65535, 100, false) == 0);
+  CHECK(std::string(WheelFfbModeName(WheelFfbMode::kRightSigned)) == "right-signed");
+}

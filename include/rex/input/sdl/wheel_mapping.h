@@ -88,6 +88,11 @@ enum class WheelFfbMode : uint8_t {
   kDifference,
   // The two motors as plain rumble, for bases without constant force.
   kRumble,
+  // One motor alone as a signed force, offset binary around 0x8000: for the
+  // case where the FFB trace shows the title centring one value and leaving
+  // the other for rumble.
+  kLeftSigned,
+  kRightSigned,
 };
 
 WheelFfbMode ParseWheelFfbMode(std::string_view text);
@@ -95,5 +100,15 @@ WheelFfbMode ParseWheelFfbMode(std::string_view text);
 // The constant-force level (SDL's Sint16 scale) for the guest's motors.
 int16_t ConstantForceFromMotors(uint16_t left_motor, uint16_t right_motor, int strength_percent,
                                 bool invert);
+
+// One motor value read as offset binary (0x8000 no force) to the
+// constant-force level.
+int16_t ConstantForceFromSignedMotor(uint16_t motor, int strength_percent, bool invert);
+
+// The constant-force level for `mode`; 0 for kOff and kRumble.
+int16_t ConstantForceForMode(WheelFfbMode mode, uint16_t left_motor, uint16_t right_motor,
+                             int strength_percent, bool invert);
+
+const char* WheelFfbModeName(WheelFfbMode mode);
 
 }  // namespace rex::input::sdl

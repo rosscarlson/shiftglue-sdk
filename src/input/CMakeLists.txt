@@ -3,6 +3,7 @@
 
 add_library(rexinput OBJECT
     input_system.cpp
+    ffb_trace.cpp
     pad_remap.cpp
     device_assignment.cpp
     state_merge.cpp
