@@ -286,6 +286,24 @@ int16_t SteeringFromAxis(int16_t raw, bool invert, int scale_percent, int deadzo
   return static_cast<int16_t>(value < 0 ? -scaled : scaled);
 }
 
+uint8_t PedalFromAxis(int16_t raw, AxisDirection direction, int bottom_percent, int top_percent) {
+  int32_t travel = int32_t(raw) + 32768;  // 0..65535
+  if (direction == AxisDirection::kInverted) {
+    travel = 65535 - travel;
+  }
+  const int32_t bottom = std::clamp(bottom_percent, 0, 50) * 65535 / 100;
+  const int32_t top = std::clamp(top_percent, 0, 50) * 65535 / 100;
+  const int32_t span = std::max(65535 - bottom - top, 1);
+  if (travel <= bottom) {
+    return 0;
+  }
+  if (travel >= 65535 - top) {
+    return 255;
+  }
+  const int32_t value = (travel - bottom) * 255 / span;
+  return static_cast<uint8_t>(std::clamp(value, 0, 255));
+}
+
 uint8_t PedalFromAxis(int16_t raw, AxisDirection direction, int deadzone_percent) {
   int32_t travel = int32_t(raw) + 32768;  // 0..65535
   if (direction == AxisDirection::kInverted) {

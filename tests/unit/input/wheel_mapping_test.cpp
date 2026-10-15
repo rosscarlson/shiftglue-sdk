@@ -278,3 +278,24 @@ TEST_CASE("Condition effects scale coefficients and saturations", "[input][wheel
   scale.strength_percent = 50;
   CHECK(EffectCondition(e, scale).left_coeff == 16383);
 }
+
+TEST_CASE("Pedals take a dead zone at each end", "[input][wheel]") {
+  // Normal travel: -32768 released, 32767 pressed.
+  CHECK(PedalFromAxis(-32768, AxisDirection::kNormal, 5, 10) == 0);
+  CHECK(PedalFromAxis(32767, AxisDirection::kNormal, 5, 10) == 255);
+  // 4 % of travel is inside a 5 % bottom dead zone.
+  CHECK(PedalFromAxis(int16_t(-32768 + 65535 * 4 / 100), AxisDirection::kNormal, 5, 0) == 0);
+  // 92 % of travel is past a 10 % top dead zone: fully pressed.
+  CHECK(PedalFromAxis(int16_t(-32768 + 65535 * 92 / 100), AxisDirection::kNormal, 0, 10) == 255);
+  // Halfway between the dead zones reads half.
+  const int16_t mid = int16_t(-32768 + 65535 * 5 / 100 + (65535 * 85 / 100) / 2);
+  CHECK(PedalFromAxis(mid, AxisDirection::kNormal, 5, 10) >= 126);
+  CHECK(PedalFromAxis(mid, AxisDirection::kNormal, 5, 10) <= 128);
+  // Inverted pedals too.
+  CHECK(PedalFromAxis(32767, AxisDirection::kInverted, 5, 10) == 0);
+  CHECK(PedalFromAxis(-32768, AxisDirection::kInverted, 5, 10) == 255);
+  // No top dead zone matches the old single dead zone.
+  for (int16_t raw : {int16_t(-32768), int16_t(-10000), int16_t(0), int16_t(20000), int16_t(32767)}) {
+    CHECK(PedalFromAxis(raw, AxisDirection::kNormal, 3, 0) == PedalFromAxis(raw, AxisDirection::kNormal, 3));
+  }
+}

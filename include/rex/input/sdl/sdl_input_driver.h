@@ -159,6 +159,9 @@ class SDLInputDriver final : public InputDriver,
   void RefreshWheelStateLocked();
   void LogWheelInputsLocked();
   uint8_t ReadWheelPedalLocked(const std::optional<WheelAxisBinding>& binding);
+  // A pedal with its own dead zones; a negative bottom uses wheel_pedal_deadzone.
+  uint8_t ReadWheelPedalLocked(const std::optional<WheelAxisBinding>& binding, int bottom_percent,
+                               int top_percent);
   X_RESULT SetWheelVibrationLocked(const X_INPUT_VIBRATION& vibration);
   void UpdateWheelSpringLocked();
 

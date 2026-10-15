@@ -70,6 +70,20 @@ REXCVAR_DEFINE_STRING(wheel_clutch_button, "LB", "Input",
 REXCVAR_DEFINE_INT32(wheel_pedal_deadzone, 3, "Input", "Pedal deadzone in percent of travel")
     .range(0, 50)
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+#define REX_WHEEL_PEDAL_DEADZONES(pedal, Pedal)                                                   \
+  REXCVAR_DEFINE_INT32(wheel_##pedal##_deadzone_bottom, -1, "Input",                             \
+                       Pedal " dead zone at rest, in percent of travel; -1 uses "                  \
+                       "wheel_pedal_deadzone")                                                     \
+      .range(-1, 50)                                                                             \
+      .lifecycle(rex::cvar::Lifecycle::kHotReload);                                              \
+  REXCVAR_DEFINE_INT32(wheel_##pedal##_deadzone_top, 0, "Input",                                 \
+                       Pedal " dead zone at full travel, in percent: past it reads fully pressed") \
+      .range(0, 50)                                                                              \
+      .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REX_WHEEL_PEDAL_DEADZONES(throttle, "Throttle")
+REX_WHEEL_PEDAL_DEADZONES(brake, "Brake")
+REX_WHEEL_PEDAL_DEADZONES(clutch, "Clutch")
+#undef REX_WHEEL_PEDAL_DEADZONES
 REXCVAR_DEFINE_STRING(wheel_buttons, "UP=h0.up,DOWN=h0.down,LEFT=h0.left,RIGHT=h0.right",
                       "Input",
                       "Wheel buttons as pad controls: \"NAME=[device|]N\" pairs separated by "
@@ -1074,6 +1088,11 @@ void SDLInputDriver::RefreshWheelBindingsLocked() {
 }
 
 uint8_t SDLInputDriver::ReadWheelPedalLocked(const std::optional<WheelAxisBinding>& binding) {
+  return ReadWheelPedalLocked(binding, -1, 0);
+}
+
+uint8_t SDLInputDriver::ReadWheelPedalLocked(const std::optional<WheelAxisBinding>& binding,
+                                             int bottom_percent, int top_percent) {
   if (!binding) {
     return 0;
   }
@@ -1087,8 +1106,11 @@ uint8_t SDLInputDriver::ReadWheelPedalLocked(const std::optional<WheelAxisBindin
     rest = -32768;
   }
   const AxisDirection direction = ResolveAxisDirection(binding->direction, rest);
-  return PedalFromAxis(SDL_GetJoystickAxis(joystick->sdl, binding->axis), direction,
-                       REXCVAR_GET(wheel_pedal_deadzone));
+  if (bottom_percent < 0) {
+    bottom_percent = REXCVAR_GET(wheel_pedal_deadzone);
+  }
+  return PedalFromAxis(SDL_GetJoystickAxis(joystick->sdl, binding->axis), direction, bottom_percent,
+                       top_percent);
 }
 
 void SDLInputDriver::RefreshWheelStateLocked() {
@@ -1109,10 +1131,13 @@ void SDLInputDriver::RefreshWheelStateLocked() {
   }
 
   const auto& b = wheel_bindings_;
-  uint8_t right_trigger = ReadWheelPedalLocked(b.throttle);
-  uint8_t left_trigger = ReadWheelPedalLocked(b.brake);
+  uint8_t right_trigger = ReadWheelPedalLocked(b.throttle, REXCVAR_GET(wheel_throttle_deadzone_bottom),
+                                               REXCVAR_GET(wheel_throttle_deadzone_top));
+  uint8_t left_trigger = ReadWheelPedalLocked(b.brake, REXCVAR_GET(wheel_brake_deadzone_bottom),
+                                              REXCVAR_GET(wheel_brake_deadzone_top));
   uint16_t buttons = 0;
-  if (ReadWheelPedalLocked(b.clutch) >= 128) {
+  if (ReadWheelPedalLocked(b.clutch, REXCVAR_GET(wheel_clutch_deadzone_bottom),
+                           REXCVAR_GET(wheel_clutch_deadzone_top)) >= 128) {
     buttons |= PadChordButtons(REXCVAR_GET(wheel_clutch_button));
   }
   for (const auto& binding : b.buttons) {
