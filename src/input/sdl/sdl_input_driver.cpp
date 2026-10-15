@@ -61,11 +61,12 @@ REXCVAR_DEFINE_STRING(wheel_throttle, "", "Input",
 REXCVAR_DEFINE_STRING(wheel_brake, "", "Input", "Brake axis, as wheel_throttle")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 REXCVAR_DEFINE_STRING(wheel_clutch, "", "Input",
-                      "Clutch axis, as wheel_throttle; past half travel it presses "
-                      "wheel_clutch_button")
+                      "Clutch axis, as wheel_throttle. A wheel's clutch is analog on the right "
+                      "stick's vertical axis, where FH1's wheel layouts read it")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
-REXCVAR_DEFINE_STRING(wheel_clutch_button, "LB", "Input",
-                      "Pad button the clutch pedal presses (the title's clutch is LB)")
+REXCVAR_DEFINE_STRING(wheel_clutch_button, "", "Input",
+                      "Pad button the clutch pedal also presses past half travel; empty for none. "
+                      "In FH1's wheel layout 1 LB shifts down, so leave it empty there")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 REXCVAR_DEFINE_INT32(wheel_pedal_deadzone, 3, "Input", "Pedal deadzone in percent of travel")
     .range(0, 50)
@@ -958,7 +959,10 @@ void SDLInputDriver::OnJoystickAddedLocked(const SDL_Event& event) {
   c.gamepad.thumb_lx = REXCVAR_GET(wheel_900_degree) ? int16_t(900)
                                                      : static_cast<int16_t>(0xFFFFu);
   c.gamepad.thumb_ly = static_cast<int16_t>(0xFFFFu);
-  c.gamepad.thumb_rx = static_cast<int16_t>(0xFFFFu);
+  // A wheel whose capabilities give thumb_rx other than 0 or 1 has an
+  // H-shifter: FH1 then reads the gear from the raw thumb_rx (0 neutral).
+  // No shifter is reported, so paddles and buttons shift.
+  c.gamepad.thumb_rx = 0;
   c.gamepad.thumb_ry = static_cast<int16_t>(0xFFFFu);
   c.vibration.left_motor_speed = 0xFFFFu;
   c.vibration.right_motor_speed = 0xFFFFu;
@@ -1166,8 +1170,14 @@ void SDLInputDriver::RefreshWheelStateLocked() {
   uint8_t left_trigger = ReadWheelPedalLocked(b.brake, REXCVAR_GET(wheel_brake_deadzone_bottom),
                                               REXCVAR_GET(wheel_brake_deadzone_top));
   uint16_t buttons = 0;
-  if (ReadWheelPedalLocked(b.clutch, REXCVAR_GET(wheel_clutch_deadzone_bottom),
-                           REXCVAR_GET(wheel_clutch_deadzone_top)) >= 128) {
+  // FH1's wheel layouts read the clutch from |thumb_ry| (a split deadzone
+  // applied radially with thumb_rx), and layout 1 shifts on LB/RB, so the
+  // clutch pedal is an axis, not a button (found by Ty Crowther,
+  // pinyon-shift PR #605).
+  const uint8_t clutch = ReadWheelPedalLocked(b.clutch, REXCVAR_GET(wheel_clutch_deadzone_bottom),
+                                              REXCVAR_GET(wheel_clutch_deadzone_top));
+  pad.thumb_ry = static_cast<int16_t>(int32_t(clutch) * 32767 / 255);
+  if (clutch >= 128) {
     buttons |= PadChordButtons(REXCVAR_GET(wheel_clutch_button));
   }
   for (const auto& binding : b.buttons) {
