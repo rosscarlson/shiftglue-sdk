@@ -173,18 +173,24 @@ class SDLInputDriver final : public InputDriver,
     bool running = false;      // the title started it
     bool sdl_running = false;  // running on the host
     bool unsupported = false;
+    bool dirty = false;         // an update waits for the rate limit
+    uint64_t applied_ms = 0;    // when it was last sent to the wheel
   };
   WheelEffectScale EffectScaleLocked() const;
   bool GameEffectsEnabled() const;
   void ApplyGameEffectLocked(GameEffect& game);
   void StopGameEffectLocked(GameEffect& game);
   void SyncGameEffectsLocked();
+  // Sends updates the rate limit held back and restarts effects the wheel stopped.
+  void FlushGameEffectsLocked();
+  uint64_t next_effect_check_ms_ = 0;
   void ApplyRumbleLocked();
   std::map<uint32_t, GameEffect> game_effects_;
   uint16_t game_rumble_left_ = 0;
   uint16_t game_rumble_right_ = 0;
   int applied_effect_strength_ = -1;
   bool applied_effect_invert_ = false;
+  int applied_condition_gains_ = -1;
 
   inline uint64_t AnalogToKeyfield(const X_INPUT_GAMEPAD& gamepad) const;
   std::optional<size_t> GetControllerIndexFromInstanceID(SDL_JoystickID instance_id);

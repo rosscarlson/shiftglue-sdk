@@ -130,6 +130,11 @@ struct WheelEffectScale {
   int magnitude_max = 10000;
   int saturation_max = 10000;
   bool invert = false;
+  // Constant force only: any non-zero force is lifted to at least this share of full scale,
+  // so small forces get past a geared or belted wheel's friction.
+  int min_force_percent = 0;
+  // Condition effects only: a further scale on their coefficients (the spring's, the damper's).
+  int condition_percent = 100;
 };
 
 // SDL's constant-force level for a constant effect: magnitude x gain x strength, reversed by

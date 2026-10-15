@@ -112,6 +112,31 @@ REXCVAR_DEFINE_STRING(wheel_ffb_device, "", "Input",
 REXCVAR_DEFINE_BOOL(wheel_hide_gamepads, true, "Input",
                     "While a racing wheel is connected, hide other SDL gamepads from the title "
                     "so none of them takes player one");
+REXCVAR_DEFINE_BOOL(wheel_900_degree, true, "Input",
+                    "Report the wheel as a 900-degree wheel (Gamepad.sThumbLX = 900 in its "
+                    "capabilities), so FH1 uses its linear 900-degree steering instead of the default "
+                    "wheel mapping, which cuts steering at speed. Set the base to 900 degrees. Read when "
+                    "the wheel connects");
+REXCVAR_DEFINE_INT32(wheel_ffb_min_force, 0, "Input",
+                     "Lifts any non-zero steering force to at least this percent, so small forces "
+                     "get past a geared or belted wheel's friction (a direct-drive base needs 0)")
+    .range(0, 30)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_INT32(wheel_ffb_spring, 100, "Input",
+                     "Strength in percent of the title's centring spring effect")
+    .range(0, 200)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_INT32(wheel_ffb_damper, 100, "Input", "Strength in percent of the title's damper effect")
+    .range(0, 200)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_INT32(wheel_ffb_friction, 100, "Input",
+                     "Strength in percent of the title's friction effect")
+    .range(0, 200)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_INT32(wheel_ffb_inertia, 100, "Input",
+                     "Strength in percent of the title's inertia effect")
+    .range(0, 200)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 REXCVAR_DEFINE_BOOL(wheel_ffb_effects, true, "Input",
                     "Play the title's own wheel force feedback effects (XInputdFF: spring, damper, "
                     "friction, inertia and constant force) on the wheel")
@@ -926,7 +951,12 @@ void SDLInputDriver::OnJoystickAddedLocked(const SDL_Event& event) {
   c.gamepad.buttons = 0xF3FF;
   c.gamepad.left_trigger = 0xFF;
   c.gamepad.right_trigger = 0xFF;
-  c.gamepad.thumb_lx = static_cast<int16_t>(0xFFFFu);
+  // FH1 reads sThumbLX == 900 in a wheel's capabilities as its 900-degree flag
+  // (pad +32) and then steers through WheelMapping900Degree: linear and not
+  // reduced at speed. The default wheel mapping keeps about a third of the
+  // steering at speed. Found by Ty Crowther (pinyon-shift PR #605).
+  c.gamepad.thumb_lx = REXCVAR_GET(wheel_900_degree) ? int16_t(900)
+                                                     : static_cast<int16_t>(0xFFFFu);
   c.gamepad.thumb_ly = static_cast<int16_t>(0xFFFFu);
   c.gamepad.thumb_rx = static_cast<int16_t>(0xFFFFu);
   c.gamepad.thumb_ry = static_cast<int16_t>(0xFFFFu);
@@ -1178,6 +1208,7 @@ void SDLInputDriver::RefreshWheelStateLocked() {
     wheel_->state_changed = true;
   }
   UpdateWheelSpringLocked();
+  FlushGameEffectsLocked();
   if (REXCVAR_GET(wheel_log_inputs)) {
     LogWheelInputsLocked();
   }
@@ -1286,8 +1317,13 @@ void SDLInputDriver::UpdateWheelSpringLocked() {
   WheelState& wheel = *wheel_;
   const int strength = REXCVAR_GET(wheel_ffb_strength);
   const bool invert = REXCVAR_GET(wheel_ffb_invert);
+  const int condition_gains = REXCVAR_GET(wheel_ffb_spring) * 1000003 +
+                              REXCVAR_GET(wheel_ffb_damper) * 1009 +
+                              REXCVAR_GET(wheel_ffb_friction) * 31 + REXCVAR_GET(wheel_ffb_inertia);
   if (!game_effects_.empty() &&
-      (strength != applied_effect_strength_ || invert != applied_effect_invert_)) {
+      (strength != applied_effect_strength_ || invert != applied_effect_invert_ ||
+       condition_gains != applied_condition_gains_)) {
+    applied_condition_gains_ = condition_gains;
     SyncGameEffectsLocked();
   }
   if (!wheel.haptic || !(wheel.haptic_features & SDL_HAPTIC_SPRING)) {
@@ -1358,7 +1394,12 @@ WheelEffectScale SDLInputDriver::EffectScaleLocked() const {
   scale.strength_percent = REXCVAR_GET(wheel_ffb_strength);
   scale.magnitude_max = REXCVAR_GET(wheel_ffb_magnitude_max);
   scale.saturation_max = REXCVAR_GET(wheel_ffb_saturation_max);
-  scale.invert = REXCVAR_GET(wheel_ffb_invert);
+  // The title's steering force takes the sign of the steering it opposes;
+  // DirectInput's (and SDL's) constant force runs the other way, so it is
+  // negated, and wheel_ffb_invert reverses that for a wheel that differs
+  // (pinyon-shift PR #605 found the same on a Thrustmaster T248).
+  scale.invert = !REXCVAR_GET(wheel_ffb_invert);
+  scale.min_force_percent = REXCVAR_GET(wheel_ffb_min_force);
   return scale;
 }
 
@@ -1403,6 +1444,13 @@ void SDLInputDriver::ApplyGameEffectLocked(GameEffect& game) {
                          e.dead_band <= 255;
       scale.saturation_max = bytes ? 255 : 10000;
     }
+    switch (e.type) {
+      case wheel_ffb::kSpring: scale.condition_percent = REXCVAR_GET(wheel_ffb_spring); break;
+      case wheel_ffb::kDamper: scale.condition_percent = REXCVAR_GET(wheel_ffb_damper); break;
+      case wheel_ffb::kFriction: scale.condition_percent = REXCVAR_GET(wheel_ffb_friction); break;
+      case wheel_ffb::kInertia: scale.condition_percent = REXCVAR_GET(wheel_ffb_inertia); break;
+      default: break;
+    }
     const WheelCondition c = EffectCondition(e, scale);
     effect.type = sdl_type;
     effect.condition.direction.type = SDL_HAPTIC_STEERING_AXIS;
@@ -1426,10 +1474,36 @@ void SDLInputDriver::ApplyGameEffectLocked(GameEffect& game) {
   } else if (!SDL_UpdateHapticEffect(haptic, game.sdl_id, &effect)) {
     return;
   }
+  game.dirty = false;
+  game.applied_ms = SDL_GetTicks();
   if (game.running && !game.sdl_running) {
     game.sdl_running = SDL_RunHapticEffect(haptic, game.sdl_id, 1);
   } else if (!game.running && game.sdl_running) {
     StopGameEffectLocked(game);
+  }
+}
+
+void SDLInputDriver::FlushGameEffectsLocked() {
+  if (!wheel_ || !wheel_->haptic || game_effects_.empty()) {
+    return;
+  }
+  const uint64_t now = SDL_GetTicks();
+  for (auto& [id, game] : game_effects_) {
+    const uint64_t interval = game.effect.type == wheel_ffb::kConstant ? 10 : 40;
+    if (game.dirty && now - game.applied_ms >= interval) {
+      ApplyGameEffectLocked(game);
+    }
+  }
+  // Some bases drop a running effect (a Thrustmaster T248 stopped them on
+  // reacquiring, pinyon-shift PR #605): start again what should be running.
+  if (now >= next_effect_check_ms_ && (wheel_->haptic_features & SDL_HAPTIC_STATUS)) {
+    next_effect_check_ms_ = now + 500;
+    for (auto& [id, game] : game_effects_) {
+      if (game.running && game.sdl_running && game.sdl_id >= 0 && GameEffectsEnabled() &&
+          SDL_GetHapticEffectStatus(wheel_->haptic, game.sdl_id) == 0) {
+        SDL_RunHapticEffect(wheel_->haptic, game.sdl_id, 1);
+      }
+    }
   }
 }
 
@@ -1508,8 +1582,18 @@ void SDLInputDriver::UpdateEffect(const wheel_ffb::Effect& effect, uint32_t) {
     ApplyGameEffectLocked(game);
     return;
   }
-  it->second.effect = effect;
-  ApplyGameEffectLocked(it->second);
+  GameEffect& game = it->second;
+  game.effect = effect;
+  // The title updates its constant force every frame (60-120 times a second).
+  // Some bases drop effects retuned that often (pinyon-shift PR #605: a T248 at
+  // 100 Hz), so the constant force goes at most every 10 ms and the others every
+  // 40 ms; the latest value is kept and sent by FlushGameEffectsLocked.
+  const uint64_t interval = effect.type == wheel_ffb::kConstant ? 10 : 40;
+  if (SDL_GetTicks() - game.applied_ms >= interval) {
+    ApplyGameEffectLocked(game);
+  } else {
+    game.dirty = true;
+  }
 }
 
 void SDLInputDriver::EffectOperation(uint32_t id, uint32_t op) {

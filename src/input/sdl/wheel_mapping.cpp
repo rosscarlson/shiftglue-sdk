@@ -394,7 +394,13 @@ int64_t ApplyGain(int64_t value, uint32_t gain, int strength_percent) {
 
 int16_t EffectConstantLevel(const wheel_ffb::Effect& effect, const WheelEffectScale& scale) {
   int64_t level = ScaleSigned(effect.magnitude, scale.magnitude_max, 32767);
-  level = ApplyGain(level, effect.gain, scale.strength_percent);
+  level = ApplyGain(level, effect.gain, 100);
+  if (level != 0 && scale.min_force_percent > 0) {
+    const int64_t floor = int64_t(32767) * std::clamp(scale.min_force_percent, 0, 100) / 100;
+    const int64_t magnitude = floor + std::abs(level) * (32767 - floor) / 32767;
+    level = level < 0 ? -magnitude : magnitude;
+  }
+  level = level * std::clamp(scale.strength_percent, 0, 100) / 100;
   if (scale.invert) {
     level = -level;
   }
@@ -403,8 +409,10 @@ int16_t EffectConstantLevel(const wheel_ffb::Effect& effect, const WheelEffectSc
 
 WheelCondition EffectCondition(const wheel_ffb::Effect& effect, const WheelEffectScale& scale) {
   auto coeff = [&](int32_t value) {
-    const int64_t scaled = ScaleSigned(value, scale.magnitude_max, 32767);
-    return static_cast<int16_t>(ApplyGain(scaled, effect.gain, scale.strength_percent));
+    int64_t scaled = ScaleSigned(value, scale.magnitude_max, 32767);
+    scaled = ApplyGain(scaled, effect.gain, scale.strength_percent);
+    scaled = scaled * std::clamp(scale.condition_percent, 0, 400) / 100;
+    return static_cast<int16_t>(std::clamp<int64_t>(scaled, -32767, 32767));
   };
   auto unsigned_scale = [&](int32_t value) {
     if (scale.saturation_max <= 0) {

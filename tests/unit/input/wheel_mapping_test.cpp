@@ -299,3 +299,39 @@ TEST_CASE("Pedals take a dead zone at each end", "[input][wheel]") {
     CHECK(PedalFromAxis(raw, AxisDirection::kNormal, 3, 0) == PedalFromAxis(raw, AxisDirection::kNormal, 3));
   }
 }
+
+TEST_CASE("Minimum force lifts small constant forces; condition gains scale coefficients",
+          "[input][wheel]") {
+  rex::input::wheel_ffb::Effect e;
+  e.type = rex::input::wheel_ffb::kConstant;
+  e.gain = 255;
+  WheelEffectScale scale;
+  scale.magnitude_max = 127;
+  e.magnitude = 0;
+  scale.min_force_percent = 10;
+  CHECK(EffectConstantLevel(e, scale) == 0);  // no force stays no force
+  e.magnitude = 1;
+  CHECK(EffectConstantLevel(e, scale) >= 3276);  // lifted to the 10 % floor
+  e.magnitude = -127;
+  CHECK(EffectConstantLevel(e, scale) == -32767);  // full scale stays full scale
+  scale.invert = true;
+  CHECK(EffectConstantLevel(e, scale) == 32767);
+  scale.invert = false;
+  scale.min_force_percent = 0;
+  e.magnitude = 64;
+  CHECK(EffectConstantLevel(e, scale) == 16512);
+
+  rex::input::wheel_ffb::Effect spring;
+  spring.type = rex::input::wheel_ffb::kSpring;
+  spring.gain = 255;
+  spring.positive_coefficient = 63;
+  spring.negative_coefficient = 63;
+  WheelEffectScale cs;
+  cs.magnitude_max = 127;
+  cs.saturation_max = 255;
+  const int16_t full = EffectCondition(spring, cs).right_coeff;
+  cs.condition_percent = 50;
+  CHECK(EffectCondition(spring, cs).right_coeff == full / 2);
+  cs.condition_percent = 0;
+  CHECK(EffectCondition(spring, cs).right_coeff == 0);
+}
