@@ -53,13 +53,13 @@ uint32_t ResolveWindowWidth(uint32_t requested_width) {
   }
   if (!rex::cvar::HasNonDefaultValue("window_width")) {
     if (rex::cvar::HasNonDefaultValue("video_mode_width") && REXCVAR_GET(video_mode_width) > 0) {
-      return uint32_t(std::clamp(REXCVAR_GET(video_mode_width), 1, 8192));
+      return uint32_t(std::clamp(REXCVAR_GET(video_mode_width), 1, 16384));
     }
     int32_t preset_width = 0;
     int32_t preset_height = 0;
     if (rex::graphics::video_mode_util::TryGetResolutionPresetFromCVar(preset_width,
                                                                        preset_height)) {
-      return uint32_t(std::clamp(preset_width, 1, 8192));
+      return uint32_t(std::clamp(preset_width, 1, 16384));
     }
   }
   return requested_width;

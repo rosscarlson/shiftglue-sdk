@@ -21,9 +21,11 @@
 
 #include <imgui.h>
 
+// Up to 16384, the widest swapchain image D3D12 allows, so a 64:9 window
+// (10240x1440, a span of two 32:9 displays) fits.
 REXCVAR_DEFINE_INT32(window_width, 0, "UI/Window",
                      "Window width in logical pixels (0 = use app default)")
-    .range(0, 8192);
+    .range(0, 16384);
 
 REXCVAR_DEFINE_INT32(window_height, 0, "UI/Window",
                      "Window height in logical pixels (0 = use app default)")
